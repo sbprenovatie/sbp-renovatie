@@ -14,7 +14,7 @@ export async function POST(req) {
     return Response.json({ ok: false, error: 'server not configured' }, { status: 500 });
   }
 
-  // basic anti-spam: naam + (telefoon of email) verplicht
+  // basis-controle: naam + (telefoon of email) verplicht
   const naam = (data.naam || '').toString().slice(0, 200);
   const telefoon = (data.telefoon || '').toString().slice(0, 60);
   const email = (data.email || '').toString().slice(0, 200);
@@ -33,6 +33,7 @@ export async function POST(req) {
     bericht: (data.bericht || '').toString().slice(0, 4000),
   };
 
+  // 1) altijd opslaan in de database
   const res = await fetch(url.replace(/\/$/, '') + '/rest/v1/leads', {
     method: 'POST',
     headers: {
@@ -49,7 +50,32 @@ export async function POST(req) {
     return Response.json({ ok: false, error: t }, { status: 500 });
   }
 
-  // Optioneel: e-mailmelding via Resend (alleen als ingesteld in env)
+  // 2) Telegram-melding (indien ingesteld) — mag falen zonder de aanvraag te breken
+  const tgToken = process.env.TELEGRAM_BOT_TOKEN;
+  const tgChat = process.env.TELEGRAM_CHAT_ID;
+  if (tgToken && tgChat) {
+    const text =
+      '🔔 Nieuwe aanvraag — SBP Renovatie\n\n' +
+      '👤 Naam: ' + (row.naam || '-') + '\n' +
+      '📞 Telefoon: ' + (row.telefoon || '-') + '\n' +
+      '✉️ E-mail: ' + (row.email || '-') + '\n' +
+      '📍 Postcode: ' + (row.postcode || '-') + '\n' +
+      '🛠 Werk: ' + (row.type_werk || '-') + '\n' +
+      '📐 Oppervlakte: ' + (row.oppervlakte || '-') + ' m²\n' +
+      '🗓 Start: ' + (row.startperiode || '-') + '\n' +
+      '📝 Bericht: ' + (row.bericht || '-');
+    try {
+      await fetch('https://api.telegram.org/bot' + tgToken + '/sendMessage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: tgChat, text: text }),
+      });
+    } catch (e) {
+      // melding faalde niet erg: de lead staat al veilig in de database
+    }
+  }
+
+  // 3) Optioneel: e-mail via Resend (alleen als ingesteld)
   const rk = process.env.RESEND_API_KEY;
   const to = process.env.LEAD_EMAIL;
   if (rk && to) {
@@ -72,9 +98,7 @@ export async function POST(req) {
             'Bericht: ' + row.bericht + '\n',
         }),
       });
-    } catch (e) {
-      // e-mail faalt niet de aanvraag; lead staat al veilig in de database
-    }
+    } catch (e) {}
   }
 
   return Response.json({ ok: true });
